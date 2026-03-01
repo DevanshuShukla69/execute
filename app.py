@@ -61,6 +61,9 @@ mongo_db = None
 blocks_col = None
 energy_col = None
 kpi_col = None
+consumption_col = None
+sustainability_col = None
+data_mode_col = None
 
 # In-memory fallback stores
 MEM_BLOCKS = []
@@ -120,6 +123,7 @@ WEATHER_CACHE_TTL = 120            # seconds
 def _try_connect_mongo():
     """Attempt to connect to MongoDB. Returns True on success."""
     global USE_MONGO, mongo_client, mongo_db, blocks_col, energy_col, kpi_col
+    global consumption_col, sustainability_col, data_mode_col
     if not MONGO_URI:
         return False
     try:
@@ -130,10 +134,14 @@ def _try_connect_mongo():
         blocks_col = mongo_db["Campus_Blocks"]
         energy_col = mongo_db["Energy_Logs"]
         kpi_col = mongo_db["Daily_KPIs"]
+        consumption_col = mongo_db["Block_Consumption"]
+        sustainability_col = mongo_db["Sustainability_Inputs"]
+        data_mode_col = mongo_db["Data_Mode"]
         energy_col.create_index([("Timestamp", DESCENDING)])
         energy_col.create_index([("Block_ID", 1), ("Timestamp", DESCENDING)])
         kpi_col.create_index([("Date", DESCENDING)], unique=True)
         blocks_col.create_index([("Name", 1)], unique=True)
+        consumption_col.create_index([("year", 1), ("month", 1), ("block", 1)], unique=True)
         USE_MONGO = True
         print("[Setup] Connected to MongoDB")
         return True
@@ -175,6 +183,43 @@ def _seed_blocks():
         for s in BLOCK_SEEDS:
             MEM_BLOCKS.append(dict(s))
         print(f"[Setup] Blocks seeded in memory ({len(MEM_BLOCKS)}).")
+
+
+def _load_persisted_data():
+    """Load block-consumption, sustainability inputs, and data-mode from MongoDB into memory."""
+    if not USE_MONGO:
+        return
+    try:
+        # Block consumption
+        docs = list(consumption_col.find({}, {"_id": 0}))
+        with _consumption_lock:
+            MEM_BLOCK_CONSUMPTION.clear()
+            MEM_BLOCK_CONSUMPTION.extend(docs)
+        print(f"[Setup] Loaded {len(docs)} block-consumption records from MongoDB.")
+
+        # Sustainability inputs
+        sdoc = sustainability_col.find_one({"_id": "main"}, {"_id": 0})
+        if sdoc:
+            with _sustainability_lock:
+                for key in ("verified_campus_area_m2", "baseline_peak_kw"):
+                    if key in sdoc:
+                        MEM_SUSTAINABILITY_INPUTS[key] = sdoc[key]
+                if "students_by_year" in sdoc:
+                    MEM_SUSTAINABILITY_INPUTS["students_by_year"] = dict(sdoc["students_by_year"])
+                if "monthly_renewable_generation" in sdoc:
+                    MEM_SUSTAINABILITY_INPUTS["monthly_renewable_generation"] = list(sdoc["monthly_renewable_generation"])
+                if "occupancy_schedule" in sdoc:
+                    MEM_SUSTAINABILITY_INPUTS["occupancy_schedule"] = dict(sdoc["occupancy_schedule"])
+            print("[Setup] Loaded sustainability inputs from MongoDB.")
+
+        # Data mode
+        mdoc = data_mode_col.find_one({"_id": "current"}, {"_id": 0})
+        if mdoc and "mode" in mdoc:
+            with _data_mode_lock:
+                _data_mode["mode"] = mdoc["mode"]
+            print(f"[Setup] Data mode restored from MongoDB: {mdoc['mode']}")
+    except Exception as exc:
+        print(f"[Setup] Error loading persisted data from MongoDB: {exc}")
 
 
 # ---------------------------------------------------------------------------
@@ -1018,6 +1063,13 @@ def api_solar_live():
 @app.route("/api/data-mode", methods=["GET"])
 def get_data_mode():
     """Return current data input mode."""
+    if USE_MONGO:
+        try:
+            doc = data_mode_col.find_one({"_id": "current"}, {"_id": 0})
+            if doc:
+                return jsonify(doc)
+        except Exception as exc:
+            print(f"[Mongo] data-mode GET error: {exc}")
     with _data_mode_lock:
         return jsonify(_data_mode)
 
@@ -1031,6 +1083,15 @@ def set_data_mode():
         return jsonify({"error": "mode must be 'manual' or 'iot'"}), 400
     with _data_mode_lock:
         _data_mode["mode"] = mode
+    if USE_MONGO:
+        try:
+            data_mode_col.update_one(
+                {"_id": "current"},
+                {"$set": {"mode": mode}},
+                upsert=True,
+            )
+        except Exception as exc:
+            print(f"[Mongo] data-mode save error: {exc}")
     return jsonify({"status": "ok", "mode": mode})
 
 
@@ -1145,6 +1206,12 @@ def clear_iot_logs():
 @app.route("/api/block-consumption", methods=["GET"])
 def get_block_consumption():
     """Return all saved block consumption records."""
+    if USE_MONGO:
+        try:
+            docs = list(consumption_col.find({}, {"_id": 0}))
+            return jsonify(docs)
+        except Exception as exc:
+            print(f"[Mongo] block-consumption GET error: {exc}")
     with _consumption_lock:
         return jsonify(list(MEM_BLOCK_CONSUMPTION))
 
@@ -1163,11 +1230,6 @@ def save_block_consumption():
     with _consumption_lock:
         for block_name, kwh_val in blocks_data.items():
             kwh = float(kwh_val)
-            # Remove old entry for same year/month/block
-            MEM_BLOCK_CONSUMPTION[:] = [
-                r for r in MEM_BLOCK_CONSUMPTION
-                if not (r["year"] == year and r["month"] == month and r["block"] == block_name)
-            ]
             record = {
                 "year": year,
                 "month": month,
@@ -1177,6 +1239,21 @@ def save_block_consumption():
                 "rate": rate,
                 "timestamp": datetime.now().isoformat(),
             }
+            # Persist to MongoDB
+            if USE_MONGO:
+                try:
+                    consumption_col.update_one(
+                        {"year": year, "month": month, "block": block_name},
+                        {"$set": record},
+                        upsert=True,
+                    )
+                except Exception as exc:
+                    print(f"[Mongo] block-consumption upsert error: {exc}")
+            # Also update in-memory
+            MEM_BLOCK_CONSUMPTION[:] = [
+                r for r in MEM_BLOCK_CONSUMPTION
+                if not (r["year"] == year and r["month"] == month and r["block"] == block_name)
+            ]
             MEM_BLOCK_CONSUMPTION.append(record)
             saved.append(record)
     return jsonify({"status": "ok", "saved": len(saved), "records": saved})
@@ -1185,6 +1262,13 @@ def save_block_consumption():
 @app.route("/api/sustainability-inputs", methods=["GET"])
 def get_sustainability_inputs():
     """Return sustainability configuration entered from Data Management."""
+    if USE_MONGO:
+        try:
+            doc = sustainability_col.find_one({"_id": "main"}, {"_id": 0})
+            if doc:
+                return jsonify({"status": "ok", **doc})
+        except Exception as exc:
+            print(f"[Mongo] sustainability-inputs GET error: {exc}")
     with _sustainability_lock:
         payload = dict(MEM_SUSTAINABILITY_INPUTS)
         payload["students_by_year"] = dict(MEM_SUSTAINABILITY_INPUTS.get("students_by_year", {}))
@@ -1250,6 +1334,17 @@ def save_sustainability_inputs():
         payload["students_by_year"] = dict(MEM_SUSTAINABILITY_INPUTS.get("students_by_year", {}))
         payload["monthly_renewable_generation"] = list(MEM_SUSTAINABILITY_INPUTS.get("monthly_renewable_generation", []))
         payload["occupancy_schedule"] = dict(MEM_SUSTAINABILITY_INPUTS.get("occupancy_schedule", {}))
+
+    # Persist to MongoDB
+    if USE_MONGO:
+        try:
+            sustainability_col.update_one(
+                {"_id": "main"},
+                {"$set": payload},
+                upsert=True,
+            )
+        except Exception as exc:
+            print(f"[Mongo] sustainability-inputs save error: {exc}")
 
     return jsonify({"status": "ok", **payload})
 
@@ -2765,6 +2860,7 @@ def initialise():
 
     _try_connect_mongo()
     _seed_blocks()
+    _load_persisted_data()
 
     simulator_thread = threading.Thread(target=iot_simulator, daemon=True)
     simulator_thread.start()
