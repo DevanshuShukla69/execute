@@ -8,11 +8,52 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
   const [role, setRole] = useState("student");
   const [showPw, setShowPw] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState("");
+
+  const readUsers = () => {
+    try {
+      const raw = localStorage.getItem("campusUsers");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const writeUsers = (users) => {
+    localStorage.setItem("campusUsers", JSON.stringify(users));
+  };
 
   const handleSubmit = () => {
-    if (!name || !email || !password) return;
+    const normalizedName = name.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPassword = password;
+
+    if (!normalizedName || !normalizedEmail || !normalizedPassword) {
+      setError("Please fill in all fields");
+      return;
+    }
+
+    const users = readUsers();
+    const exists = users.some((u) => String(u?.email || "").toLowerCase() === normalizedEmail);
+    if (exists) {
+      setError("Account already exists. Please sign in.");
+      return;
+    }
+
+    const nextUsers = [
+      ...users,
+      {
+        name: normalizedName,
+        email: normalizedEmail,
+        password: normalizedPassword,
+        role: role === "admin" ? "admin" : "student",
+        createdAt: new Date().toISOString(),
+      },
+    ];
+    writeUsers(nextUsers);
+    setError("");
     setSubmitted(true);
-    // Demo — just show success, no real registration yet
   };
 
   return (
@@ -61,7 +102,7 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
               </div>
               <h3 className="text-lg font-bold text-white mb-1">Account Created!</h3>
               <p className="text-sm text-slate-500 mb-6">
-                This is a demo — no real account was created.
+                You can now sign in with your email and password.
               </p>
               <button
                 onClick={onGoToLogin}
@@ -72,6 +113,11 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
             </div>
           ) : (
             <>
+              {error && (
+                <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-500/[0.06] px-4 py-3 text-sm text-rose-200">
+                  {error}
+                </div>
+              )}
               <div className="space-y-4 mb-6">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
