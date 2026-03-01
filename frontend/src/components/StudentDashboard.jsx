@@ -242,6 +242,16 @@ export default function StudentDashboard({ onLogout }) {
       setCallError("Please enter a valid 10-digit Indian mobile number");
       return;
     }
+
+    const toFriendlyCallError = (maybeError) => {
+      const message = String(maybeError || "").trim();
+      if (!message) return "Failed to request call";
+      if (/\b403\b/i.test(message) || /forbidden/i.test(message)) {
+        return "You are not registered";
+      }
+      return message;
+    };
+
     setCallRequesting(true);
     setCallError("");
     setCallSuccess(false);
@@ -256,7 +266,7 @@ export default function StudentDashboard({ onLogout }) {
         setCallSuccess(true);
         showToast("acid", "📞", "Call Requested!", "You will receive a call shortly");
       } else {
-        setCallError(data.error || "Failed to request call");
+        setCallError(toFriendlyCallError(data?.error));
       }
     } catch (err) {
       setCallError("Could not reach server. Please try again.");
