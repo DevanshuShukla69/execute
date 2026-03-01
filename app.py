@@ -64,6 +64,11 @@ kpi_col = None
 consumption_col = None
 sustainability_col = None
 data_mode_col = None
+users_col = None
+
+# In-memory user store (fallback when MongoDB unavailable)
+MEM_USERS = []  # [{name, email, password_hash, role, created_at}]
+_users_lock = threading.Lock()
 
 # In-memory fallback stores
 MEM_BLOCKS = []
@@ -137,6 +142,8 @@ def _try_connect_mongo():
         consumption_col = mongo_db["Block_Consumption"]
         sustainability_col = mongo_db["Sustainability_Inputs"]
         data_mode_col = mongo_db["Data_Mode"]
+        users_col = mongo_db["Users"]
+        users_col.create_index([("email", 1)], unique=True)
         energy_col.create_index([("Timestamp", DESCENDING)])
         energy_col.create_index([("Block_ID", 1), ("Timestamp", DESCENDING)])
         kpi_col.create_index([("Date", DESCENDING)], unique=True)
@@ -2841,6 +2848,77 @@ def serve_react(path):
         return send_from_directory(str(BUILD_DIR), path)
     # Fall back to index.html for client-side routing
     return send_from_directory(str(BUILD_DIR), "index.html")
+
+
+# ---------------------------------------------------------------------------
+# Auth — Register / Login
+# ---------------------------------------------------------------------------
+from werkzeug.security import generate_password_hash, check_password_hash
+
+
+@app.route("/api/register", methods=["POST"])
+def api_register():
+    """Register a new user.  Body: { name, email, password, role }"""
+    body = request.get_json(force=True) or {}
+    name = (body.get("name") or "").strip()
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    role = body.get("role", "student")
+    if not name or not email or not password:
+        return jsonify({"error": "Name, email, and password are required"}), 400
+    if role not in ("student", "admin"):
+        role = "student"
+    pw_hash = generate_password_hash(password)
+    user_doc = {
+        "name": name,
+        "email": email,
+        "password_hash": pw_hash,
+        "role": role,
+        "created_at": datetime.now().isoformat(),
+    }
+    if USE_MONGO:
+        try:
+            users_col.insert_one(dict(user_doc))
+            return jsonify({"success": True, "message": "Account created"})
+        except Exception as exc:
+            if "duplicate" in str(exc).lower() or "E11000" in str(exc):
+                return jsonify({"error": "An account with this email already exists"}), 409
+            return jsonify({"error": str(exc)}), 500
+    else:
+        with _users_lock:
+            if any(u["email"] == email for u in MEM_USERS):
+                return jsonify({"error": "An account with this email already exists"}), 409
+            MEM_USERS.append(user_doc)
+        return jsonify({"success": True, "message": "Account created"})
+
+
+@app.route("/api/login", methods=["POST"])
+def api_login():
+    """Login with email+password.  Body: { email, password }"""
+    body = request.get_json(force=True) or {}
+    email = (body.get("email") or "").strip().lower()
+    password = body.get("password") or ""
+    if not email or not password:
+        return jsonify({"error": "Email and password are required"}), 400
+    user = None
+    if USE_MONGO:
+        try:
+            user = users_col.find_one({"email": email})
+        except Exception as exc:
+            return jsonify({"error": f"Database error: {exc}"}), 500
+    else:
+        with _users_lock:
+            user = next((u for u in MEM_USERS if u["email"] == email), None)
+    if not user:
+        return jsonify({"error": "No account found with this email"}), 401
+    if not check_password_hash(user["password_hash"], password):
+        return jsonify({"error": "Incorrect password"}), 401
+    return jsonify({
+        "success": True,
+        "role": user.get("role", "student"),
+        "name": user.get("name", ""),
+        "email": user.get("email", ""),
+    })
 
 
 # ---------------------------------------------------------------------------

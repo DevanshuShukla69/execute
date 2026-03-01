@@ -1,44 +1,39 @@
 import React, { useState } from "react";
 import { Building2, ShieldCheck, GraduationCap, ArrowRight, Eye, EyeOff } from "lucide-react";
 
+const BASE = process.env.REACT_APP_API_URL || "";
+
 export default function LoginPage({ onLogin, onGoToRegister, onBackToLanding }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPw, setShowPw] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const readUsers = () => {
-    try {
-      const raw = localStorage.getItem("campusUsers");
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  };
-
-  const handleSignIn = () => {
-    const normalizedEmail = email.trim().toLowerCase();
-    const normalizedPassword = password;
-
-    if (!normalizedEmail || !normalizedPassword) {
+  const handleSignIn = async () => {
+    if (!email || !password) {
       setError("Please enter email and password");
       return;
     }
-
-    const users = readUsers();
-    const user = users.find((u) => String(u?.email || "").toLowerCase() === normalizedEmail);
-    if (!user) {
-      setError("Account not found. Please register.");
-      return;
-    }
-    if (String(user?.password || "") !== normalizedPassword) {
-      setError("Invalid email or password");
-      return;
-    }
-
     setError("");
-    onLogin(user.role === "admin" ? "admin" : "student");
+    setLoading(true);
+    try {
+      const res = await fetch(`${BASE}/api/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        onLogin(data.role || "student");
+      } else {
+        setError(data.error || "Login failed");
+      }
+    } catch {
+      setError("Could not reach server. Try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -78,11 +73,6 @@ export default function LoginPage({ onLogin, onGoToRegister, onBackToLanding }) 
 
         {/* Login Form Card */}
         <div className="glass-card p-8 mb-6">
-          {error && (
-            <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-500/[0.06] px-4 py-3 text-sm text-rose-200">
-              {error}
-            </div>
-          )}
           <div className="space-y-4 mb-6">
             <div>
               <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
@@ -94,9 +84,6 @@ export default function LoginPage({ onLogin, onGoToRegister, onBackToLanding }) 
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@nmims.edu"
                 className="w-full h-11 px-4 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder-slate-600 focus:border-sky-500/40 focus:outline-none focus:ring-1 focus:ring-sky-500/20 transition-all"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleSignIn();
-                }}
               />
             </div>
             <div>
@@ -110,9 +97,6 @@ export default function LoginPage({ onLogin, onGoToRegister, onBackToLanding }) 
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   className="w-full h-11 px-4 pr-11 rounded-xl bg-white/[0.04] border border-white/[0.08] text-sm text-white placeholder-slate-600 focus:border-sky-500/40 focus:outline-none focus:ring-1 focus:ring-sky-500/20 transition-all"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleSignIn();
-                  }}
                 />
                 <button
                   type="button"
@@ -125,11 +109,18 @@ export default function LoginPage({ onLogin, onGoToRegister, onBackToLanding }) 
             </div>
           </div>
 
+          {error && (
+            <div className="mb-4 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-400/20 text-xs text-red-400">
+              {error}
+            </div>
+          )}
+
           <button
             onClick={handleSignIn}
-            className="w-full h-11 rounded-xl bg-sky-500/20 border border-sky-400/25 text-sm font-semibold text-sky-300 hover:bg-sky-500/30 transition-all duration-200 flex items-center justify-center gap-2"
+            disabled={loading}
+            className="w-full h-11 rounded-xl bg-sky-500/20 border border-sky-400/25 text-sm font-semibold text-sky-300 hover:bg-sky-500/30 transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
           >
-            Sign In <ArrowRight className="w-4 h-4" />
+            {loading ? "Signing in..." : <>Sign In <ArrowRight className="w-4 h-4" /></>}
           </button>
 
           <p className="text-center text-xs text-slate-600 mt-4">

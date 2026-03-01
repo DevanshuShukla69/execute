@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import { Building2, ArrowRight, Eye, EyeOff, ArrowLeft } from "lucide-react";
 
+const BASE = process.env.REACT_APP_API_URL || "";
+
 export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -9,51 +11,32 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
   const [showPw, setShowPw] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const readUsers = () => {
-    try {
-      const raw = localStorage.getItem("campusUsers");
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
-  };
-
-  const writeUsers = (users) => {
-    localStorage.setItem("campusUsers", JSON.stringify(users));
-  };
-
-  const handleSubmit = () => {
-    const normalizedName = name.trim();
-    const normalizedEmail = email.trim().toLowerCase();
-    const normalizedPassword = password;
-
-    if (!normalizedName || !normalizedEmail || !normalizedPassword) {
+  const handleSubmit = async () => {
+    if (!name || !email || !password) {
       setError("Please fill in all fields");
       return;
     }
-
-    const users = readUsers();
-    const exists = users.some((u) => String(u?.email || "").toLowerCase() === normalizedEmail);
-    if (exists) {
-      setError("Account already exists. Please sign in.");
-      return;
-    }
-
-    const nextUsers = [
-      ...users,
-      {
-        name: normalizedName,
-        email: normalizedEmail,
-        password: normalizedPassword,
-        role: role === "admin" ? "admin" : "student",
-        createdAt: new Date().toISOString(),
-      },
-    ];
-    writeUsers(nextUsers);
     setError("");
-    setSubmitted(true);
+    setLoading(true);
+    try {
+      const res = await fetch(`${BASE}/api/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, email, password, role }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setSubmitted(true);
+      } else {
+        setError(data.error || "Registration failed");
+      }
+    } catch {
+      setError("Could not reach server. Try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -102,7 +85,7 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
               </div>
               <h3 className="text-lg font-bold text-white mb-1">Account Created!</h3>
               <p className="text-sm text-slate-500 mb-6">
-                You can now sign in with your email and password.
+                You can now sign in with your credentials.
               </p>
               <button
                 onClick={onGoToLogin}
@@ -113,11 +96,6 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
             </div>
           ) : (
             <>
-              {error && (
-                <div className="mb-4 rounded-xl border border-rose-400/20 bg-rose-500/[0.06] px-4 py-3 text-sm text-rose-200">
-                  {error}
-                </div>
-              )}
               <div className="space-y-4 mb-6">
                 <div>
                   <label className="block text-xs font-medium text-slate-400 uppercase tracking-wider mb-2">
@@ -186,11 +164,18 @@ export default function RegisterPage({ onGoToLogin, onBackToLanding }) {
                 </div>
               </div>
 
+              {error && (
+                <div className="mb-4 px-4 py-2.5 rounded-xl bg-red-500/10 border border-red-400/20 text-xs text-red-400">
+                  {error}
+                </div>
+              )}
+
               <button
                 onClick={handleSubmit}
-                className="w-full h-11 rounded-xl bg-emerald-500/20 border border-emerald-400/25 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 transition-all duration-200 flex items-center justify-center gap-2"
+                disabled={loading}
+                className="w-full h-11 rounded-xl bg-emerald-500/20 border border-emerald-400/25 text-sm font-semibold text-emerald-300 hover:bg-emerald-500/30 transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
               >
-                Create Account <ArrowRight className="w-4 h-4" />
+                {loading ? "Creating..." : <>Create Account <ArrowRight className="w-4 h-4" /></>}
               </button>
             </>
           )}
