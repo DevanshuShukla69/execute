@@ -44,7 +44,13 @@ SURGE_THRESHOLD_KW = 400
 # ---------------------------------------------------------------------------
 BUILD_DIR = Path(__file__).resolve().parent / "frontend" / "build"
 app = Flask(__name__, static_folder=None)   # disable default /static
-CORS(app)
+
+# CORS — allow Vercel frontend in production, everything in dev
+_frontend_url = os.getenv("FRONTEND_URL", "")
+if _frontend_url:
+    CORS(app, origins=[_frontend_url, "http://localhost:3000"], supports_credentials=True)
+else:
+    CORS(app)
 
 # ---------------------------------------------------------------------------
 # Storage — MongoDB or In-Memory

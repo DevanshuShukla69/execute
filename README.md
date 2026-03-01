@@ -153,6 +153,46 @@ The React dev server opens at **http://localhost:3000**.
 
 ---
 
+## ☁️ Deployment
+
+### Backend → Railway
+
+1. Create a new project on [Railway](https://railway.app)
+2. Connect this GitHub repo → set **Root Directory** to `/` (repo root)
+3. Railway auto-detects the `Dockerfile`. Set these **Environment Variables**:
+
+| Variable | Value |
+|----------|-------|
+| `MONGO_URI` | Your MongoDB connection string (or leave empty for in-memory) |
+| `MONGO_DB` | `smart_campus` |
+| `FRONTEND_URL` | `https://your-app.vercel.app` (your Vercel URL for CORS) |
+| `TWILIO_ACCOUNT_SID` | *(optional)* Twilio SID for voice agent |
+| `TWILIO_AUTH_TOKEN` | *(optional)* Twilio auth token |
+| `TWILIO_PHONE_NUMBER` | *(optional)* Twilio phone number |
+| `ULTRAVOX_API_KEY` | *(optional)* Ultravox API key |
+
+4. Deploy — Railway will build and start the Flask backend on a public URL.
+
+### Frontend → Vercel
+
+1. Create a new project on [Vercel](https://vercel.app)
+2. Connect this GitHub repo → set **Root Directory** to `frontend`
+3. Framework Preset: **Create React App**
+4. Set this **Environment Variable**:
+
+| Variable | Value |
+|----------|-------|
+| `REACT_APP_API_URL` | `https://your-railway-backend.up.railway.app` |
+
+5. Deploy — Vercel will build the React app and serve it.
+
+6. **After both are live**, update:
+   - Railway env: `FRONTEND_URL` → your actual Vercel URL
+   - Vercel env: `REACT_APP_API_URL` → your actual Railway URL
+   - Update `frontend/vercel.json` rewrites destination with your Railway URL
+
+---
+
 ## ⚙️ Environment Variables
 
 | Variable | Default | Description |
@@ -161,6 +201,8 @@ The React dev server opens at **http://localhost:3000**.
 | `MONGO_DB` | `smart_campus` | MongoDB database name |
 | `FLASK_HOST` | `0.0.0.0` | Flask bind address |
 | `FLASK_PORT` | `5000` | Flask port |
+| `FRONTEND_URL` | *(empty)* | Vercel frontend URL for CORS (leave empty to allow all origins) |
+| `REACT_APP_API_URL` | *(empty)* | Railway backend URL (set in Vercel env vars) |
 
 ---
 
