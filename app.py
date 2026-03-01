@@ -345,6 +345,16 @@ def api_info():
     })
 
 
+@app.route("/api/health")
+def api_health():
+    """Lightweight health endpoint for platform healthchecks."""
+    return jsonify({
+        "status": "ok",
+        "storage": "MongoDB" if USE_MONGO else "In-Memory",
+        "ts": datetime.now().isoformat(),
+    })
+
+
 @app.route("/blocks")
 def get_blocks():
     if USE_MONGO:
@@ -460,6 +470,30 @@ def api_overview():
         now = datetime.now()
         today_logs = _get_today_logs(now)
 
+        def _to_dt(ts):
+            if isinstance(ts, datetime):
+                return ts
+            if isinstance(ts, (int, float)):
+                try:
+                    return datetime.fromtimestamp(ts)
+                except Exception:
+                    return now
+            if isinstance(ts, str):
+                s = ts.strip()
+                if s.endswith("Z"):
+                    s = s[:-1] + "+00:00"
+                try:
+                    return datetime.fromisoformat(s)
+                except Exception:
+                    return now
+            return now
+
+        def _num(val, default=0.0):
+            try:
+                return float(val)
+            except Exception:
+                return float(default)
+
         # 1. Block-level readings
         latest = {}
         if USE_MONGO:
@@ -481,9 +515,9 @@ def api_overview():
         for name, info in latest.items():
             log = info["log"]
             sqft = info["sqft"]
-            grid = log.get("Grid_Power_Draw_kW", 0)
-            solar = log.get("Solar_Power_Generated_kW", 0)
-            hvac = log.get("HVAC_Power_kW", 0)
+            grid = _num(log.get("Grid_Power_Draw_kW", 0))
+            solar = _num(log.get("Solar_Power_Generated_kW", 0))
+            hvac = _num(log.get("HVAC_Power_kW", 0))
             total_grid += grid
             total_solar += solar
             total_hvac += hvac
@@ -503,9 +537,9 @@ def api_overview():
             })
 
         # 2. Day aggregated KPIs
-        sum_grid = sum(lg["Grid_Power_Draw_kW"] for lg in today_logs)
-        sum_solar = sum(lg["Solar_Power_Generated_kW"] for lg in today_logs)
-        max_grid = max((lg["Grid_Power_Draw_kW"] for lg in today_logs), default=0)
+        sum_grid = sum(_num(lg.get("Grid_Power_Draw_kW", 0)) for lg in today_logs)
+        sum_solar = sum(_num(lg.get("Solar_Power_Generated_kW", 0)) for lg in today_logs)
+        max_grid = max((_num(lg.get("Grid_Power_Draw_kW", 0)) for lg in today_logs), default=0)
 
         day_grid_kwh = (sum_grid * SIMULATOR_INTERVAL_SECONDS) / 3600
         day_solar_kwh = (sum_solar * SIMULATOR_INTERVAL_SECONDS) / 3600
@@ -516,8 +550,9 @@ def api_overview():
 
         # Peak demand
         peak_demand_kw = round(max_grid, 2)
-        peak_log = max(today_logs, key=lambda x: x["Grid_Power_Draw_kW"]) if today_logs else None
-        peak_demand_time = peak_log["Timestamp"].strftime("%H:%M") if peak_log else now.strftime("%H:%M")
+        peak_log = max(today_logs, key=lambda x: _num(x.get("Grid_Power_Draw_kW", 0))) if today_logs else None
+        peak_ts = _to_dt(peak_log.get("Timestamp")) if peak_log else now
+        peak_demand_time = peak_ts.strftime("%H:%M")
 
         # 3. Net-Zero Score
         net_zero_progress = min(100, round(
@@ -541,12 +576,12 @@ def api_overview():
         # 4. Hourly Energy Profile
         hourly_buckets = {}
         for lg in today_logs:
-            h = lg["Timestamp"].hour
+            h = _to_dt(lg.get("Timestamp")).hour
             if h not in hourly_buckets:
                 hourly_buckets[h] = {"grid": [], "solar": [], "hvac": []}
-            hourly_buckets[h]["grid"].append(lg["Grid_Power_Draw_kW"])
-            hourly_buckets[h]["solar"].append(lg["Solar_Power_Generated_kW"])
-            hourly_buckets[h]["hvac"].append(lg["HVAC_Power_kW"])
+            hourly_buckets[h]["grid"].append(_num(lg.get("Grid_Power_Draw_kW", 0)))
+            hourly_buckets[h]["solar"].append(_num(lg.get("Solar_Power_Generated_kW", 0)))
+            hourly_buckets[h]["hvac"].append(_num(lg.get("HVAC_Power_kW", 0)))
 
         hourly_profile = []
         for h in sorted(hourly_buckets.keys()):
@@ -559,13 +594,13 @@ def api_overview():
             })
 
         # 5. Activity Feed
-        recent = sorted(today_logs, key=lambda x: x["Timestamp"], reverse=True)[:20]
+        recent = sorted(today_logs, key=lambda x: _to_dt(x.get("Timestamp")), reverse=True)[:20]
         activity_feed = []
         for lg in recent:
-            gk = lg.get("Grid_Power_Draw_kW", 0)
-            sk = lg.get("Solar_Power_Generated_kW", 0)
+            gk = _num(lg.get("Grid_Power_Draw_kW", 0))
+            sk = _num(lg.get("Solar_Power_Generated_kW", 0))
             bn = lg.get("Block_Name", "Unknown")
-            ts = lg["Timestamp"].strftime("%H:%M:%S")
+            ts = _to_dt(lg.get("Timestamp")).strftime("%H:%M:%S")
             if gk > 200:
                 activity_feed.append({"time": ts, "block": bn,
                     "event": f"High grid draw: {gk:.0f} kW", "type": "warning"})
